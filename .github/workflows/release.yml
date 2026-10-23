@@ -1,0 +1,40 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish Ankh-macos-universal.zip to GitHub Releases.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: make setup
+      - name: Test
+        run: make frontend test
+      - name: Build universal Ankh.app
+        run: VERSION="${GITHUB_REF_NAME#v}" make universal
+      - name: Package
+        run: |
+          ditto -c -k --keepParent build/bin/Ankh.app Ankh-macos-universal.zip
+          shasum -a 256 Ankh-macos-universal.zip > Ankh-macos-universal.zip.sha256
+          lipo -archs build/bin/Ankh.app/Contents/MacOS/ankh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Ankh-macos-universal.zip Ankh-macos-universal.zip.sha256 \
+            --title "Ankh $GITHUB_REF_NAME" --generate-notes
