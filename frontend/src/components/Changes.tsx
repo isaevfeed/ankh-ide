@@ -495,7 +495,7 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
             rows={1}
             value={msg}
             spellCheck={false}
-            placeholder={stagedN ? `Сообщение коммита · ${stagedN} ${plural(stagedN, ["файл", "файла", "файлов"])} в индексе` : "Сообщение коммита · закоммитит все изменения"}
+            placeholder={stagedN ? `Сообщение коммита · в индексе: ${stagedN}` : "Сообщение коммита"}
             onChange={(e) => setMsg(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
