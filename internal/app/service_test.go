@@ -19,8 +19,19 @@ func run(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// shortHome is a temp HOME short enough for the unix socket inside it:
+// t.TempDir() under macOS $TMPDIR overflows the 104-byte sun_path limit.
+func shortHome(t *testing.T) string {
+	home, err := os.MkdirTemp("", "ankh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	return home
+}
+
 func TestSessionsAndReview(t *testing.T) {
-	home := t.TempDir()
+	home := shortHome(t)
 	t.Setenv("HOME", home)
 	repo := filepath.Join(home, "proj")
 	_ = os.MkdirAll(repo, 0o755)

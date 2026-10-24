@@ -160,7 +160,10 @@ func Run(root, q string, o Options, isRepo bool) (*Result, error) {
 	}
 	res := &Result{Hits: []Hit{}}
 	if isRepo {
-		err = gitGrep(root, q, o, re, res)
+		err = gitGrep(root, q, o, re, res, true)
+		if errors.Is(err, errNoPCRE) {
+			err = gitGrep(root, q, o, re, res, false)
+		}
 	} else {
 		err = walk(root, o, re, res)
 	}
@@ -172,7 +175,12 @@ func Run(root, q string, o Options, isRepo bool) (*Result, error) {
 	return res, err
 }
 
-func gitGrep(root, q string, o Options, re *regexp.Regexp, res *Result) error {
+// errNoPCRE: this git was built without libpcre, so -P is unavailable.
+var errNoPCRE = errors.New("git grep: no PCRE")
+
+// gitGrep runs git grep. With pcre a regex goes as -P: RE2 is close to a subset
+// of PCRE, while the system ERE behind -E (macOS) has no \w, \d or \s.
+func gitGrep(root, q string, o Options, re *regexp.Regexp, res *Result, pcre bool) error {
 	args := []string{"-c", "core.quotepath=off", "grep", "-n", "-I", "-z", "--no-color", "--untracked", "--full-name"}
 	if !o.Case {
 		args = append(args, "-i")
@@ -180,7 +188,9 @@ func gitGrep(root, q string, o Options, re *regexp.Regexp, res *Result) error {
 	if o.Word {
 		args = append(args, "-w")
 	}
-	if o.Regex {
+	if o.Regex && pcre {
+		args = append(args, "-P")
+	} else if o.Regex {
 		args = append(args, "-E")
 	} else {
 		args = append(args, "-F")
@@ -235,6 +245,9 @@ func gitGrep(root, q string, o Options, re *regexp.Regexp, res *Result) error {
 	}
 	if err != nil {
 		msg := strings.TrimSpace(errb.String())
+		if strings.Contains(msg, "USE_LIBPCRE") {
+			return errNoPCRE
+		}
 		if strings.Contains(msg, "regex") || strings.Contains(msg, "Unmatched") || strings.Contains(msg, "Invalid") {
 			return ErrBadRegex
 		}

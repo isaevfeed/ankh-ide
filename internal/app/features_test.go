@@ -50,7 +50,7 @@ func (e *events) wait(t *testing.T, match func(name string, data any) bool) {
 }
 
 func newTestService(t *testing.T) (*Service, *events, string) {
-	home := t.TempDir()
+	home := shortHome(t)
 	t.Setenv("HOME", home)
 	t.Setenv("SHELL", "/bin/sh")
 	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "t"}, {"GIT_AUTHOR_EMAIL", "t@t"}, {"GIT_COMMITTER_NAME", "t"}, {"GIT_COMMITTER_EMAIL", "t@t"}} {
