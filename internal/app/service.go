@@ -61,7 +61,7 @@ type Service struct {
 	captures  map[string]*capture
 	hooks     map[string]*hookState  // per session: what Claude Code's hooks reported
 	statuses  map[string]statusEntry // git status per session, refreshed by poll
-	repos     map[string]bool        // path → is a git work tree
+	repos     map[string]repoCheck   // path → is a git work tree
 	noLimits  bool                   // statusLine came without rate_limits
 	shellSeq  int
 	stop      chan struct{}
@@ -97,7 +97,7 @@ func New(host *Host, dir, exe string) (*Service, error) {
 		captures:     map[string]*capture{},
 		hooks:        map[string]*hookState{},
 		statuses:     map[string]statusEntry{},
-		repos:        map[string]bool{},
+		repos:        map[string]repoCheck{},
 		stop:         make(chan struct{}),
 		indexes:      map[string]fileIndex{},
 		acp:          map[string]*acpSession{},
@@ -768,17 +768,27 @@ type statusEntry struct {
 	m  map[string]string
 }
 
-// isRepo caches `git rev-parse --is-inside-work-tree` per folder.
+type repoCheck struct {
+	ok bool
+	at time.Time
+}
+
+// notRepoTTL: how long a "not a repo" answer is trusted. A folder opened
+// before `git init` must become a repo without restarting the app.
+var notRepoTTL = 5 * time.Second
+
+// isRepo caches `git rev-parse --is-inside-work-tree` per folder: a yes for
+// good, a no for notRepoTTL.
 func (s *Service) isRepo(path string) bool {
 	s.mu.Lock()
-	v, ok := s.repos[path]
+	c, ok := s.repos[path]
 	s.mu.Unlock()
-	if ok {
-		return v
+	if ok && (c.ok || time.Since(c.at) < notRepoTTL) {
+		return c.ok
 	}
-	v = gitx.IsRepo(path)
+	v := gitx.IsRepo(path)
 	s.mu.Lock()
-	s.repos[path] = v
+	s.repos[path] = repoCheck{ok: v, at: time.Now()}
 	s.mu.Unlock()
 	return v
 }

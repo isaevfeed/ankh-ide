@@ -95,3 +95,41 @@ func TestSessionsAndReview(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A folder opened before `git init` turns into a repo without a restart.
+func TestRepoAfterOpen(t *testing.T) {
+	home := shortHome(t)
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "proj")
+	_ = os.MkdirAll(repo, 0o755)
+	s, err := New(&Host{Emit: func(string, ...any) bool { return false }}, filepath.Join(home, "cfg"), "/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Shutdown(s)
+	p, err := s.AddProjectPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := p.Sessions[0].ID
+	if d, err := s.GetDiff(sid, "wip"); err != nil || len(d.Files) != 0 {
+		t.Fatalf("diff before init = %+v %v", d, err)
+	}
+
+	_ = os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\n"), 0o644)
+	run(t, repo, "init", "-q", "-b", "main")
+	run(t, repo, "add", ".")
+	run(t, repo, "commit", "-q", "-m", "init")
+
+	// within the TTL the cached "no" still holds
+	if d, _ := s.GetDiff(sid, "last"); len(d.Files) != 0 {
+		t.Fatalf("cached no-repo ignored: %+v", d)
+	}
+	old := notRepoTTL
+	notRepoTTL = 0
+	t.Cleanup(func() { notRepoTTL = old })
+	d, err := s.GetDiff(sid, "last")
+	if err != nil || len(d.Files) != 1 || d.Files[0].Path != "main.go" {
+		t.Fatalf("diff after init = %+v %v", d, err)
+	}
+}
