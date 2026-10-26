@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { api, errText } from "../lib/api";
 import { chatActive, guard, reload, saveSettings, showAgent, suggestClear } from "../lib/actions";
 import { highlight } from "../lib/highlight";
-import { anchoredHere, draftComment, firstCol, locString, newLineOf } from "../lib/review";
+import { anchoredHere, commentKey, draftComment, firstCol, locString, newLineOf, rowKey } from "../lib/review";
 import { toast, useUI, EMPTY } from "../lib/store";
 import type { Comment, DiffMode, DiffResult, FileDiff, MRInfo, Session } from "../lib/types";
 import { Check, Minus, Undo2 } from "lucide-react";
@@ -14,7 +14,7 @@ interface Form {
   li: number;
   liE: number | null;
   col: number | null;
-  text: string;
+  text: string; // initial text; what is typed lives in CommentForm
   editId?: string;
 }
 
@@ -48,6 +48,104 @@ const wipCount = new Map<string, number>();
 // Unfinished commit messages per session.
 const commitMsgs = new Map<string, string>();
 
+// The comment and commit fields keep their text in their own state: a keystroke
+// must not re-render a diff of thousands of rows.
+
+function CommentForm(props: {
+  initial: string;
+  draft: MutableRefObject<string>; // last typed text, carried to a re-opened form
+  focusKey: string;
+  editing: boolean;
+  rangeHint: boolean;
+  onSave: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(props.initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    props.draft.current = props.initial;
+  }, []);
+  useEffect(() => {
+    ref.current?.focus();
+  }, [props.focusKey]);
+  return (
+    <>
+      <textarea
+        ref={ref}
+        className="field"
+        placeholder="Что поправить? Например: переименуй переменную"
+        value={text}
+        onChange={(e) => {
+          props.draft.current = e.target.value;
+          setText(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            props.onSave(text);
+          }
+          if (e.key === "Escape") props.onCancel();
+        }}
+      />
+      <div className="cactions">
+        <span className="note">⌘Enter — сохранить · Esc — отмена{props.rangeHint ? " · Shift+клик по + — диапазон" : ""}</span>
+        <button className="btn sm ghost" onClick={props.onCancel}>
+          Отмена
+        </button>
+        <button className="btn sm primary" onClick={() => props.onSave(text)} disabled={!text.trim()}>
+          {props.editing ? "Сохранить" : "Добавить"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function CommitBox(props: { sid: string; stagedN: number; onCommitted: () => Promise<void> }) {
+  const [msg, setMsgRaw] = useState(() => commitMsgs.get(props.sid) ?? "");
+  const [committing, setCommitting] = useState(false);
+  const setMsg = (v: string) => {
+    commitMsgs.set(props.sid, v);
+    setMsgRaw(v);
+  };
+
+  const commit = async () => {
+    if (!msg.trim() || committing) return;
+    setCommitting(true);
+    try {
+      const h = await api.commit(props.sid, msg, props.stagedN === 0);
+      setMsg("");
+      toast(`Закоммичено: ${h}`);
+      await props.onCommitted();
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  return (
+    <div className="commit">
+      <textarea
+        className="field mono"
+        rows={1}
+        value={msg}
+        spellCheck={false}
+        placeholder={props.stagedN ? `Сообщение коммита · в индексе: ${props.stagedN}` : "Сообщение коммита"}
+        onChange={(e) => setMsg(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void commit();
+          }
+        }}
+      />
+      <button className="btn" disabled={!msg.trim() || committing} onClick={() => void commit()} title="⌘Enter">
+        {committing ? "Коммичу…" : props.stagedN ? "Commit" : "Commit all"}
+      </button>
+    </div>
+  );
+}
+
 export function Changes(props: { session: Session; splitter?: ReactNode }) {
   const sid = props.session.id;
   const comments: Comment[] = props.session.comments ?? [];
@@ -60,15 +158,9 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discardAsk, setDiscardAsk] = useState<string[] | null>(null);
-  const [msg, setMsgRaw] = useState(() => commitMsgs.get(props.session.id) ?? "");
-  const [committing, setCommitting] = useState(false);
   const [mr, setMR] = useState<MRInfo | null>(null);
-  const setMsg = (v: string) => {
-    commitMsgs.set(sid, v);
-    setMsgRaw(v);
-  };
   const scroller = useRef<HTMLDivElement>(null);
-  const textRef = useRef<HTMLTextAreaElement>(null);
+  const draft = useRef("");
 
   const load = useCallback(async () => {
     try {
@@ -100,13 +192,22 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
     if (gitTick > 0) void load();
   }, [gitTick, load]);
 
-  useEffect(() => {
-    if (form) textRef.current?.focus();
-  }, [form?.fi, form?.hi, form?.li, form?.liE, form?.editId]);
-
   const files: FileDiff[] = diff?.files ?? [];
   const drafts = comments.filter((c) => !c.sent);
   const sentCount = comments.length - drafts.length;
+
+  // Highlighting and comment lookup are done once per diff, not per render.
+  const html = useMemo(() => files.map((f) => (f.hunks ?? EMPTY).map((h) => h.lines.map((l) => highlight(l.text, f.path) || " "))), [files]);
+  const byRow = useMemo(() => {
+    const m = new Map<string, Comment[]>();
+    for (const c of comments) {
+      const k = commentKey(c);
+      const list = m.get(k);
+      if (list) list.push(c);
+      else m.set(k, [c]);
+    }
+    return m;
+  }, [comments]);
 
   // Comments that do not land on any row of the current diff.
   const orphans = useMemo(() => {
@@ -118,16 +219,16 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
 
   const openForm = (fi: number, hi: number, li: number, col: number | null, shift: boolean) => {
     if (shift && form && !form.editId && form.fi === fi && form.hi === hi && li !== form.li) {
-      setForm({ ...form, liE: li, col: null });
+      setForm({ ...form, liE: li, col: null, text: draft.current });
       return;
     }
     setConfirmCancel(false);
-    setForm({ fi, hi, li, liE: null, col, text: form && !form.editId ? form.text : "" });
+    setForm({ fi, hi, li, liE: null, col, text: form && !form.editId ? draft.current : "" });
   };
 
-  const save = async () => {
+  const save = async (typed: string) => {
     if (!form) return;
-    const text = form.text.trim();
+    const text = typed.trim();
     if (!text) return;
     try {
       if (form.editId) {
@@ -167,21 +268,6 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
   const pathsOf = (f: FileDiff) => (f.oldPath && f.oldPath !== f.path ? [f.path, f.oldPath] : [f.path]);
   const index = diff?.mode === "wip" ? (diff.index ?? {}) : null;
   const stagedN = index ? Object.values(index).filter((v) => v).length : 0;
-
-  const commit = async () => {
-    if (!msg.trim() || committing) return;
-    setCommitting(true);
-    try {
-      const h = await api.commit(sid, msg, stagedN === 0);
-      setMsg("");
-      toast(`Закоммичено: ${h}`);
-      await load();
-    } catch (e) {
-      toast(errText(e));
-    } finally {
-      setCommitting(false);
-    }
-  };
 
   const toMR = async () => {
     setBusy(true);
@@ -234,29 +320,17 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
           {deleted && <span className="badge">удалённый код</span>}
         </div>
       )}
-      <textarea
-        ref={textRef}
-        className="field"
-        placeholder="Что поправить? Например: переименуй переменную"
-        value={form?.text ?? ""}
-        onChange={(e) => form && setForm({ ...form, text: e.target.value })}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            void save();
-          }
-          if (e.key === "Escape") setForm(null);
-        }}
-      />
-      <div className="cactions">
-        <span className="note">⌘Enter — сохранить · Esc — отмена{form && form.liE === null && !form.editId ? " · Shift+клик по + — диапазон" : ""}</span>
-        <button className="btn sm ghost" onClick={() => setForm(null)}>
-          Отмена
-        </button>
-        <button className="btn sm primary" onClick={() => void save()} disabled={!form?.text.trim()}>
-          {form?.editId ? "Сохранить" : "Добавить"}
-        </button>
-      </div>
+      {form && (
+        <CommentForm
+          initial={form.text}
+          draft={draft}
+          focusKey={`${form.fi}:${form.hi}:${form.li}:${form.liE}:${form.editId}`}
+          editing={!!form.editId}
+          rangeHint={form.liE === null && !form.editId}
+          onSave={(t) => void save(t)}
+          onCancel={() => setForm(null)}
+        />
+      )}
     </div>
   );
 
@@ -433,7 +507,7 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
                   {h.lines.map((l, li) => {
                     const cls = l.t === "+" ? " add" : l.t === "-" ? " del" : "";
                     const ranged = fm && li >= lo && li <= hiIdx ? " ranged" : "";
-                    const here = comments.filter((c) => anchoredHere(c, f.path, l));
+                    const here = byRow.get(rowKey(f.path, l)) ?? EMPTY;
                     let formLoc = "";
                     let formDeleted = false;
                     if (fm && li === hiIdx) {
@@ -459,7 +533,7 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
                               if (String(window.getSelection() ?? "").length) return;
                               openForm(fi, hi, li, colFromPoint(e.currentTarget, e.clientX, e.clientY) ?? firstCol(l.text), e.shiftKey);
                             }}
-                            dangerouslySetInnerHTML={{ __html: highlight(l.text, f.path) || " " }}
+                            dangerouslySetInnerHTML={{ __html: html[fi][hi][li] }}
                           />
                           <button
                             className="plus"
@@ -488,27 +562,7 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
         )}
       </div>
 
-      {index && files.length > 0 && (
-        <div className="commit">
-          <textarea
-            className="field mono"
-            rows={1}
-            value={msg}
-            spellCheck={false}
-            placeholder={stagedN ? `Сообщение коммита · в индексе: ${stagedN}` : "Сообщение коммита"}
-            onChange={(e) => setMsg(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                void commit();
-              }
-            }}
-          />
-          <button className="btn" disabled={!msg.trim() || committing} onClick={() => void commit()} title="⌘Enter">
-            {committing ? "Коммичу…" : stagedN ? "Commit" : "Commit all"}
-          </button>
-        </div>
-      )}
+      {index && files.length > 0 && <CommitBox key={sid} sid={sid} stagedN={stagedN} onCommitted={load} />}
 
       <div className="cfoot">
         {confirmCancel && drafts.length > 0 ? (

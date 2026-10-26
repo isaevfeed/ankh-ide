@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { anchoredHere, draftComment, firstCol, locString, newLineOf } from "./review.ts";
+import { anchoredHere, commentKey, draftComment, firstCol, locString, newLineOf, rowKey } from "./review.ts";
 import type { Hunk } from "./types.ts";
 
 const h: Hunk = {
@@ -47,4 +47,11 @@ test("draftComment single, deleted and range", () => {
   assert.ok(!anchoredHere(d as never, "a.go", h.lines[2]));
   // same line number in another file: not here
   assert.ok(!anchoredHere(r as never, "b.go", h.lines[4]));
+});
+
+test("commentKey matches rowKey exactly where anchoredHere does", () => {
+  const cs = [draftComment("a.go", h, 1, null, 3, "x"), draftComment("a.go", h, 4, 2, null, "y"), draftComment("a.go", h, 2, null, null, "z")];
+  for (const c of cs)
+    for (const path of ["a.go", "b.go"])
+      for (const l of h.lines) assert.equal(commentKey(c as never) === rowKey(path, l), anchoredHere(c as never, path, l));
 });

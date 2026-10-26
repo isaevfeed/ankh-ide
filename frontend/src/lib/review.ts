@@ -54,6 +54,15 @@ export function draftComment(path: string, h: Hunk, from: number, to: number | n
   };
 }
 
+/** Key of the row a comment hangs under; equals rowKey of that row (see anchoredHere). */
+export function commentKey(c: Comment): string {
+  return `${c.path}\0${c.side === "old" ? "o" : "n"}\0${c.lineEnd || c.line}`;
+}
+
+export function rowKey(path: string, l: DiffLine): string {
+  return l.t === "-" ? `${path}\0o\0${l.o}` : `${path}\0n\0${l.n}`;
+}
+
 /** Does this comment hang under this row of this file? (rendered after its last line) */
 export function anchoredHere(c: Comment, path: string, l: DiffLine): boolean {
   if (c.path !== path) return false;
