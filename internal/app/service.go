@@ -321,6 +321,17 @@ func (s *Service) MarkSeen(sessionID string) {
 	}
 }
 
+// MarkActiveSeen marks the open session seen; called when the app becomes
+// active, since the webview does not always get a focus event.
+func (s *Service) MarkActiveSeen() {
+	s.mu.Lock()
+	id := s.active
+	s.mu.Unlock()
+	if id != "" {
+		s.MarkSeen(id)
+	}
+}
+
 func (s *Service) Branches(projectID string) []string {
 	var path string
 	s.store.View(func(d *state.Data) {

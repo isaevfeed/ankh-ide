@@ -139,6 +139,27 @@ func TestDockBadge(t *testing.T) {
 	}
 }
 
+// Coming back to the app clears only the session on screen.
+func TestMarkActiveSeen(t *testing.T) {
+	s, _, repo := newTestService(t)
+	var mu sync.Mutex
+	var badges []string
+	s.host.SetBadge = func(l string) { mu.Lock(); badges = append(badges, l); mu.Unlock() }
+	p, _ := s.AddProjectPath(repo)
+	sid := p.Sessions[0].ID
+	if err := s.SetActive(p.ID, sid); err != nil {
+		t.Fatal(err)
+	}
+	s.setStatus(sid, StatusWaiting)
+	s.setStatus("other", StatusWaiting)
+	s.MarkActiveSeen()
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(badges, "|") != "1|2|1" || s.status[sid] != StatusIdle || s.status["other"] != StatusWaiting {
+		t.Fatalf("badges = %q, status = %v", badges, s.status)
+	}
+}
+
 // fakeACP answers initialize and session/new, and on a prompt streams a
 // chunk, asks for permission and finishes with the chosen option.
 const fakeACP = `import json, sys

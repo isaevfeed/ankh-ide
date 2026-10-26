@@ -99,6 +99,10 @@ func main() {
 	wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		setDockIcon(dockIcon)
 	})
+	// Coming back to the app clears the badge of the session on screen.
+	wapp.Event.OnApplicationEvent(events.Mac.ApplicationDidBecomeActive, func(*application.ApplicationEvent) {
+		svc.MarkActiveSeen()
+	})
 
 	app.Start(svc)
 	if err := wapp.Run(); err != nil {
