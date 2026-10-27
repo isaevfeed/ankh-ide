@@ -448,14 +448,15 @@ func Discard(dir string, paths []string) error {
 	return err
 }
 
-// Commit commits the index. With all and an empty index it stages everything first.
-// It returns the new commit's short hash.
+// Commit commits the index; with all it stages every change first, even
+// when part of the work is staged already. It returns the new commit's
+// short hash.
 func Commit(dir, message string, all bool) (string, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return "", errors.New("пустое сообщение коммита")
 	}
-	if all && !HasStaged(dir) {
+	if all {
 		if err := Stage(dir, nil); err != nil {
 			return "", err
 		}

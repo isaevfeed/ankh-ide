@@ -243,3 +243,30 @@ func TestStageRemovalTwiceAndRename(t *testing.T) {
 		seen[f.Path] = true
 	}
 }
+
+// Commit all takes every change even when something is staged already
+// (an agent often runs `git add` on part of its work).
+func TestCommitAllWithPartlyStaged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "t"}, {"GIT_AUTHOR_EMAIL", "t@t"}, {"GIT_COMMITTER_NAME", "t"}, {"GIT_COMMITTER_EMAIL", "t@t"}} {
+		t.Setenv(kv[0], kv[1])
+	}
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	write(t, filepath.Join(dir, "a.txt"), "one\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "init")
+	write(t, filepath.Join(dir, "a.txt"), "two\n")
+	write(t, filepath.Join(dir, "b.txt"), "new\n")
+	write(t, filepath.Join(dir, "sub", "c.txt"), "deep\n")
+	git(t, dir, "add", "a.txt")
+	if _, err := Commit(dir, "all", true); err != nil {
+		t.Fatal(err)
+	}
+	if HasChanges(dir) {
+		st, _ := Status(dir)
+		t.Fatalf("left uncommitted: %v", st)
+	}
+}
