@@ -47,6 +47,7 @@ export interface Project {
   name: string;
   path: string;
   setupScript: string;
+  assistant?: boolean;
   sessions: Session[];
   activeSession: string;
 }
@@ -127,7 +128,15 @@ export interface DiffResult {
   branch: string;
   files: FileDiff[] | null;
   index?: Record<string, "" | "staged" | "partial"> | null;
+  ahead: number;
+  upstream: string;
   relocated?: number;
+}
+
+export interface BranchList {
+  current: string;
+  local: string[] | null;
+  remote: string[] | null;
 }
 
 export type View =

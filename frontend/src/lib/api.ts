@@ -1,6 +1,6 @@
 import { Call, Events } from "@wailsio/runtime";
 import type { SearchOpts } from "./search";
-import type { ACPInfo, SearchResult, Comment, DiffMode, DiffResult, Entry, FileContent, MRInfo, Project, Session, Settings, StateDTO, Usage } from "./types";
+import type { ACPInfo, BranchList, SearchResult, Comment, DiffMode, DiffResult, Entry, FileContent, MRInfo, Project, Session, Settings, StateDTO, Usage } from "./types";
 
 const SVC = "ankh-ide/internal/app.Service.";
 
@@ -59,6 +59,9 @@ export const api = {
   unstage: (sessionId: string, paths: string[]) => call<void>("Unstage", sessionId, paths),
   discard: (sessionId: string, paths: string[]) => call<void>("Discard", sessionId, paths),
   commit: (sessionId: string, message: string, all: boolean) => call<string>("Commit", sessionId, message, all),
+  push: (sessionId: string) => call<string>("Push", sessionId),
+  listBranches: (sessionId: string) => call<BranchList>("ListBranches", sessionId),
+  switchBranch: (sessionId: string, branch: string, create: boolean) => call<void>("SwitchBranch", sessionId, branch, create),
 
   mrStatus: (sessionId: string) => call<MRInfo>("MRStatus", sessionId),
   mrCreate: (sessionId: string, draft: boolean) => call<MRInfo>("MRCreate", sessionId, draft),

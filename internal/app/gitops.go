@@ -136,10 +136,63 @@ func (s *Service) Commit(sessionID, message string, all bool) (string, error) {
 	}
 	defer s.afterGit(sessionID, false)
 	h, err := gitx.Commit(ss.Path, message, all)
-	if err == nil {
-		s.logf("commit %s session=%s", h, sessionID)
+	if err != nil {
+		return "", err
 	}
-	return h, err
+	s.logf("commit %s session=%s", h, sessionID)
+	// The work on sent review comments is committed: they are done.
+	return h, s.DiscardSent(sessionID)
+}
+
+// ListBranches returns the session's local and remote branches.
+func (s *Service) ListBranches(sessionID string) (gitx.BranchList, error) {
+	ss, err := s.repoOf(sessionID)
+	if err != nil {
+		return gitx.BranchList{}, err
+	}
+	return gitx.ListBranches(ss.Path), nil
+}
+
+// SwitchBranch checks out (or with create — creates from HEAD) a branch in
+// the project's main session; a worktree session is bound to its branch.
+func (s *Service) SwitchBranch(sessionID, branch string, create bool) error {
+	ss, err := s.repoOf(sessionID)
+	if err != nil {
+		return err
+	}
+	if ss.Worktree {
+		return errors.New("ветка worktree-сессии закреплена — для другой ветки создайте новую сессию")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("не указана ветка")
+	}
+	defer s.afterGit(sessionID, true)
+	if err := gitx.Switch(ss.Path, branch, create); err != nil {
+		return err
+	}
+	cur := gitx.Branch(ss.Path)
+	s.logf("switch %s session=%s", cur, sessionID)
+	return s.store.Update(func(d *state.Data) error {
+		if _, x := d.Session(sessionID); x != nil {
+			x.Branch = cur
+		}
+		return nil
+	})
+}
+
+// Push pushes the session's branch, publishing it when it has no upstream.
+func (s *Service) Push(sessionID string) (string, error) {
+	ss, err := s.repoOf(sessionID)
+	if err != nil {
+		return "", err
+	}
+	defer s.afterGit(sessionID, false)
+	out, err := gitx.Push(ss.Path)
+	if err == nil {
+		s.logf("push session=%s", sessionID)
+	}
+	return out, err
 }
 
 /* ---------- comments follow their lines ---------- */

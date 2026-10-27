@@ -135,6 +135,9 @@ func (s *Service) emit(name string, data any) {
 // Start begins background polling; called once by main. It is a function,
 // not a method, so the UI cannot call it.
 func Start(s *Service) {
+	if err := s.EnsureAssistant(); err != nil {
+		s.logf("assistant: %v", err)
+	}
 	go s.rewatch()
 	go s.poll()
 }
@@ -235,9 +238,35 @@ func (s *Service) AddProjectPath(path string) (*state.Project, error) {
 	return res, err
 }
 
+// EnsureAssistant adds the pinned assistant: an agent that is not about any
+// project and works in ~/.ankh/assistant.
+func (s *Service) EnsureAssistant() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".ankh", "assistant")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	return s.store.Update(func(d *state.Data) error {
+		for _, p := range d.Projects {
+			if p.Assistant {
+				return nil
+			}
+		}
+		main := &state.Session{ID: state.NewID(), Path: path, Agent: d.Settings.DefaultAgent, Comments: []state.Comment{}}
+		d.Projects = append(d.Projects, &state.Project{ID: state.NewID(), Name: "Ассистент", Path: path, Assistant: true, Sessions: []*state.Session{main}, ActiveSession: main.ID})
+		return nil
+	})
+}
+
 func (s *Service) RemoveProject(id string) error {
 	var ids []string
 	err := s.store.Update(func(d *state.Data) error {
+		if p := d.Project(id); p != nil && p.Assistant {
+			return errors.New("ассистента нельзя убрать")
+		}
 		out := d.Projects[:0]
 		for _, p := range d.Projects {
 			if p.ID == id {
@@ -951,6 +980,24 @@ func (s *Service) DiscardDrafts(sessionID string, all bool) error {
 		out := ss.Comments[:0]
 		for _, c := range ss.Comments {
 			if c.Sent && !all {
+				out = append(out, c)
+			}
+		}
+		ss.Comments = out
+		return nil
+	})
+}
+
+// DiscardSent deletes sent comments, keeping drafts.
+func (s *Service) DiscardSent(sessionID string) error {
+	return s.store.Update(func(d *state.Data) error {
+		_, ss := d.Session(sessionID)
+		if ss == nil {
+			return errors.New("сессия не найдена")
+		}
+		out := ss.Comments[:0]
+		for _, c := range ss.Comments {
+			if !c.Sent {
 				out = append(out, c)
 			}
 		}

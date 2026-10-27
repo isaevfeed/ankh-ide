@@ -258,3 +258,74 @@ func TestACPChat(t *testing.T) {
 		t.Fatalf("state = %s", info.State)
 	}
 }
+
+func TestCommitClearsSentComments(t *testing.T) {
+	s, _, repo := newTestService(t)
+	p, _ := s.AddProjectPath(repo)
+	sid := p.Sessions[0].ID
+	for _, text := range []string{"sent", "draft"} {
+		if _, err := s.AddComment(sid, state.Comment{Path: "a.go", Side: "new", Line: 3, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		if text == "sent" {
+			_ = s.store.Update(func(d *state.Data) error { _, x := d.Session(sid); x.Comments[0].Sent = true; return nil })
+		}
+	}
+	_ = os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644)
+	if _, err := s.Commit(sid, "fix", true); err != nil {
+		t.Fatal(err)
+	}
+	_, ss, _ := s.session(sid)
+	if len(ss.Comments) != 1 || ss.Comments[0].Text != "draft" {
+		t.Fatalf("comments = %+v", ss.Comments)
+	}
+}
+
+func TestSwitchBranch(t *testing.T) {
+	s, _, repo := newTestService(t)
+	p, _ := s.AddProjectPath(repo)
+	sid := p.Sessions[0].ID
+	if err := s.SwitchBranch(sid, "feature/new", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ss, _ := s.session(sid); ss.Branch != "feature/new" {
+		t.Fatalf("branch in state = %q", ss.Branch)
+	}
+	if bl, err := s.ListBranches(sid); err != nil || bl.Current != "feature/new" || len(bl.Local) != 2 {
+		t.Fatalf("branches = %+v %v", bl, err)
+	}
+	if err := s.SwitchBranch(sid, "main", false); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := s.CreateSession(p.ID, "feature/wt", "main", "claude", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwitchBranch(wt.ID, "main", false); err == nil {
+		t.Fatal("worktree session switched branch")
+	}
+}
+
+func TestAssistant(t *testing.T) {
+	s, _, _ := newTestService(t)
+	for i := 0; i < 2; i++ {
+		if err := s.EnsureAssistant(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var as []*state.Project
+	for _, p := range s.GetState().Data.Projects {
+		if p.Assistant {
+			as = append(as, p)
+		}
+	}
+	if len(as) != 1 || len(as[0].Sessions) != 1 || !strings.HasSuffix(as[0].Path, filepath.Join(".ankh", "assistant")) {
+		t.Fatalf("assistant = %+v", as)
+	}
+	if fi, err := os.Stat(as[0].Path); err != nil || !fi.IsDir() {
+		t.Fatalf("assistant folder: %v", err)
+	}
+	if err := s.RemoveProject(as[0].ID); err == nil {
+		t.Fatal("assistant removed")
+	}
+}

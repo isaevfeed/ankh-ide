@@ -146,6 +146,31 @@ function CommitBox(props: { sid: string; stagedN: number; onCommitted: () => Pro
   );
 }
 
+function PushBar(props: { sid: string; ahead: number; upstream: string; onPushed: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const push = async () => {
+    setBusy(true);
+    try {
+      await api.push(props.sid);
+      toast(props.upstream ? `Запушено в ${props.upstream}` : "Ветка опубликована");
+      await props.onPushed();
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const n = `${props.ahead} ${plural(props.ahead, ["коммит", "коммита", "коммитов"])}`;
+  return (
+    <div className="pushbar">
+      <span className="sub">{props.upstream ? `↑ ${n} → ${props.upstream}` : `Ветка не опубликована · ${n}`}</span>
+      <button className="btn sm" disabled={busy} onClick={() => void push()}>
+        {busy ? "Пушу…" : props.upstream ? "Push" : "Опубликовать"}
+      </button>
+    </div>
+  );
+}
+
 export function Changes(props: { session: Session; splitter?: ReactNode }) {
   const sid = props.session.id;
   const comments: Comment[] = props.session.comments ?? [];
@@ -159,6 +184,7 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [discardAsk, setDiscardAsk] = useState<string[] | null>(null);
   const [mr, setMR] = useState<MRInfo | null>(null);
+  const [confirmed, setConfirmed] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const draft = useRef("");
 
@@ -281,6 +307,23 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
     }
   };
 
+  // A sent comment the user checked: shown green for a moment, then removed.
+  const confirm = (id: string) => {
+    setConfirmed((xs) => [...xs, id]);
+    setTimeout(() => {
+      void api
+        .deleteComment(sid, id)
+        .then(reload)
+        .catch((e) => toast(errText(e)))
+        .finally(() => setConfirmed((xs) => xs.filter((x) => x !== id)));
+    }, 900);
+  };
+
+  const afterCommit = async () => {
+    await load();
+    await reload(); // sent comments are gone with the commit
+  };
+
   const discard = async (all: boolean) => {
     await api.discardDrafts(sid, all).catch((e) => toast(errText(e)));
     setConfirmCancel(false);
@@ -289,14 +332,23 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
   };
 
   const commentBox = (c: Comment, outdated: boolean) => (
-    <div key={c.id} className={"cbox" + (c.sent ? " sent" : "")}>
+    <div key={c.id} className={"cbox" + (c.sent ? " sent" : "") + (confirmed.includes(c.id) ? " confirmed" : "")}>
       <div className="cmeta">
         <b>{c.loc.slice(c.path.length + 1)}{c.deleted ? " · удалённый код" : ""}</b>
         {c.author && <span className="badge" title="Замечание из GitLab MR">@{c.author}</span>}
         {outdated && <span className="badge warn" title="Строки с этим кодом больше нет в файле">строка изменилась</span>}
         {!outdated && c.movedFrom ? <span className="badge" title="Код сдвинулся, замечание переехало вместе с ним">со строки {c.movedFrom}</span> : null}
-        {c.sent ? (
-          <span className="badge">{c.target === "mr" ? "в MR" : "отправлено"}</span>
+        {confirmed.includes(c.id) ? (
+          <span className="badge ok">исправлено</span>
+        ) : c.sent ? (
+          <>
+            <span className="badge">{c.target === "mr" ? "в MR" : "отправлено"}</span>
+            <span className="cactions">
+              <button className="btn sm ok" title="Правка верна — убрать замечание" onClick={() => confirm(c.id)}>
+                Верно ✓
+              </button>
+            </span>
+          </>
         ) : (
           <span className="cactions">
             <button className="btn sm ghost" onClick={() => setForm({ fi: -1, hi: -1, li: -1, liE: null, col: null, text: c.text, editId: c.id })}>
@@ -562,7 +614,8 @@ export function Changes(props: { session: Session; splitter?: ReactNode }) {
         )}
       </div>
 
-      {index && files.length > 0 && <CommitBox key={sid} sid={sid} stagedN={stagedN} onCommitted={load} />}
+      {diff && diff.ahead > 0 && <PushBar sid={sid} ahead={diff.ahead} upstream={diff.upstream} onPushed={load} />}
+      {index && files.length > 0 && <CommitBox key={sid} sid={sid} stagedN={stagedN} onCommitted={afterCommit} />}
 
       <div className="cfoot">
         {confirmCancel && drafts.length > 0 ? (

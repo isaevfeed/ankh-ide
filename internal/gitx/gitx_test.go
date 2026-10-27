@@ -270,3 +270,71 @@ func TestCommitAllWithPartlyStaged(t *testing.T) {
 		t.Fatalf("left uncommitted: %v", st)
 	}
 }
+
+func TestBranchesSwitchAndPush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "t"}, {"GIT_AUTHOR_EMAIL", "t@t"}, {"GIT_COMMITTER_NAME", "t"}, {"GIT_COMMITTER_EMAIL", "t@t"}} {
+		t.Setenv(kv[0], kv[1])
+	}
+	root := t.TempDir()
+	remote, dir := filepath.Join(root, "remote.git"), filepath.Join(root, "work")
+	git(t, root, "init", "-q", "--bare", "-b", "main", remote)
+	git(t, root, "clone", "-q", remote, dir)
+	write(t, filepath.Join(dir, "a.txt"), "one\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "init")
+	if n, up := Ahead(dir); n != 1 || up != "" {
+		t.Fatalf("unpublished main: ahead=%d up=%q", n, up)
+	}
+	if _, err := Push(dir); err != nil {
+		t.Fatal(err)
+	}
+	if n, up := Ahead(dir); n != 0 || up != "origin/main" {
+		t.Fatalf("after publish: ahead=%d up=%q", n, up)
+	}
+	// a branch that exists only on the remote
+	git(t, dir, "push", "-q", "origin", "HEAD:refs/heads/feature/remote")
+	git(t, dir, "fetch", "-q")
+
+	if err := Switch(dir, "feature/x", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := Switch(dir, "bad..name", true); err == nil {
+		t.Fatal("bad branch name accepted")
+	}
+	bl := ListBranches(dir)
+	if bl.Current != "feature/x" || len(bl.Local) != 2 || bl.Local[0] != "feature/x" || len(bl.Remote) != 1 || bl.Remote[0] != "origin/feature/remote" {
+		t.Fatalf("branches = %+v", bl)
+	}
+	write(t, filepath.Join(dir, "a.txt"), "two\n")
+	git(t, dir, "commit", "-q", "-am", "x")
+	if _, err := Push(dir); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "a.txt"), "three\n")
+	git(t, dir, "commit", "-q", "-am", "y")
+	if n, up := Ahead(dir); n != 1 || up != "origin/feature/x" {
+		t.Fatalf("ahead=%d up=%q", n, up)
+	}
+	if _, err := Push(dir); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := Ahead(dir); n != 0 {
+		t.Fatalf("ahead after push = %d", n)
+	}
+
+	if err := Switch(dir, "origin/feature/remote", false); err != nil {
+		t.Fatal(err)
+	}
+	if b := Branch(dir); b != "feature/remote" {
+		t.Fatalf("branch = %q", b)
+	}
+	if _, up := Ahead(dir); up != "origin/feature/remote" {
+		t.Fatalf("tracking = %q", up)
+	}
+	if err := Switch(dir, "main", false); err != nil || Branch(dir) != "main" {
+		t.Fatalf("switch main: %v", err)
+	}
+}

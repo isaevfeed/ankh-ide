@@ -4,12 +4,14 @@ package gitx
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"ankh-ide/internal/diffparse"
 )
@@ -74,6 +76,119 @@ func Branches(dir string) []string {
 	return res
 }
 
+// BranchList: local branches (current first) and remote branches that have
+// no local branch of the same name.
+type BranchList struct {
+	Current string   `json:"current"`
+	Local   []string `json:"local"`
+	Remote  []string `json:"remote"`
+}
+
+func ListBranches(dir string) BranchList {
+	res := BranchList{Current: Branch(dir), Local: Branches(dir), Remote: []string{}}
+	have := map[string]bool{}
+	for _, b := range res.Local {
+		have[b] = true
+	}
+	out, err := Run(dir, "for-each-ref", "--format=%(refname:short)", "--sort=-committerdate", "refs/remotes")
+	if err != nil {
+		return res
+	}
+	for _, r := range strings.Split(strings.TrimSpace(out), "\n") {
+		_, name, ok := strings.Cut(r, "/")
+		if !ok || name == "HEAD" || r == "" || have[name] {
+			continue
+		}
+		have[name] = true
+		res.Remote = append(res.Remote, r)
+	}
+	return res
+}
+
+// Switch checks out a branch; a remote one ("origin/x") gets a local
+// tracking branch "x". With create a new branch starts at HEAD.
+// Uncommitted changes go along unless they conflict (git refuses then).
+func Switch(dir, branch string, create bool) error {
+	if create {
+		if _, err := Run(dir, "check-ref-format", "--branch", branch); err != nil {
+			return fmt.Errorf("недопустимое имя ветки: %s", branch)
+		}
+		_, err := Run(dir, "switch", "-q", "-c", branch)
+		return err
+	}
+	if _, err := Run(dir, "rev-parse", "--verify", "-q", "refs/heads/"+branch); err != nil {
+		if _, name, ok := strings.Cut(branch, "/"); ok {
+			if _, err := Run(dir, "rev-parse", "--verify", "-q", "refs/remotes/"+branch); err == nil {
+				_, err := Run(dir, "switch", "-q", "-c", name, "--track", branch)
+				return err
+			}
+		}
+	}
+	_, err := Run(dir, "switch", "-q", branch)
+	return err
+}
+
+// Ahead counts commits not pushed to the upstream; with no upstream it is
+// the number of commits not on any remote branch, and upstream is "".
+func Ahead(dir string) (n int, upstream string) {
+	if !hasHead(dir) {
+		return 0, ""
+	}
+	if out, err := Run(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil {
+		upstream = strings.TrimSpace(out)
+		out, _ = Run(dir, "rev-list", "--count", "@{u}..HEAD")
+		fmt.Sscan(strings.TrimSpace(out), &n)
+		return n, upstream
+	}
+	out, _ := Run(dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
+	fmt.Sscan(strings.TrimSpace(out), &n)
+	return n, ""
+}
+
+// Push pushes the current branch; one without an upstream is published to
+// origin (or the only remote) and starts tracking it.
+func Push(dir string) (string, error) {
+	b := Branch(dir)
+	if b == "" || b == "HEAD" {
+		return "", errors.New("нет текущей ветки")
+	}
+	args := []string{"push"}
+	if _, up := Ahead(dir); up == "" {
+		out, _ := Run(dir, "remote")
+		remotes := strings.Fields(out)
+		remote := ""
+		for _, r := range remotes {
+			if r == "origin" {
+				remote = r
+			}
+		}
+		if remote == "" && len(remotes) == 1 {
+			remote = remotes[0]
+		}
+		if remote == "" {
+			return "", errors.New("у репозитория нет remote — некуда пушить")
+		}
+		args = append(args, "-u", remote, b)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(out))
+	if ctx.Err() != nil {
+		return "", errors.New("git push не ответил за 2 минуты")
+	}
+	if err != nil {
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", errors.New(msg)
+	}
+	return msg, nil
+}
+
 // DefaultBase picks the branch a feature branch is compared against.
 func DefaultBase(dir string) string {
 	for _, b := range []string{"develop", "main", "master", "origin/develop", "origin/main", "origin/master"} {
@@ -136,6 +251,9 @@ type DiffResult struct {
 	Files  []diffparse.FileDiff `json:"files"`
 	// Index (wip mode): path → "staged" | "partial" | "" (nothing staged).
 	Index map[string]string `json:"index,omitempty"`
+	// Ahead: commits not pushed yet; Upstream: the tracked branch, "" if none.
+	Ahead    int    `json:"ahead"`
+	Upstream string `json:"upstream"`
 	// Relocated: how many review comments moved or went outdated while
 	// building this diff — the UI reloads them.
 	Relocated int `json:"relocated,omitempty"`
@@ -148,6 +266,7 @@ type DiffResult struct {
 //	last   — the last commit
 func Diff(dir, mode, base string) (*DiffResult, error) {
 	res := &DiffResult{Mode: mode, Branch: Branch(dir)}
+	res.Ahead, res.Upstream = Ahead(dir)
 	args := []string{"diff", "--no-ext-diff", "--no-color", "-U3", "-M"}
 	untracked := true
 	switch mode {

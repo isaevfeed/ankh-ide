@@ -62,10 +62,13 @@ type Session struct {
 }
 
 type Project struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Path          string     `json:"path"`
-	SetupScript   string     `json:"setupScript"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	SetupScript string `json:"setupScript"`
+	// Assistant marks the pinned general-purpose agent: not tied to a
+	// project, works in its own folder, cannot be removed.
+	Assistant     bool       `json:"assistant,omitempty"`
 	Sessions      []*Session `json:"sessions"`
 	ActiveSession string     `json:"activeSession"`
 }

@@ -4,10 +4,11 @@ import { guard, openChat, reload, selectSession, setViews } from "../lib/actions
 import { getState, toast, useUI, viewsOf, EMPTY } from "../lib/store";
 import { disposeTerm, getTerm, markRestarted } from "../lib/terminals";
 import type { Project, Session } from "../lib/types";
+import { GitBranch } from "lucide-react";
 import { Menu, type MenuItem } from "./Floating";
 import { TerminalView } from "./TerminalView";
 import { FilePreview } from "./FilePreview";
-import { NewSessionPopover, CloseSessionPopover } from "./SessionPopovers";
+import { BranchPopover, NewSessionPopover, CloseSessionPopover } from "./SessionPopovers";
 import { AgentHints } from "./AgentHints";
 import { ChatView } from "./ChatView";
 
@@ -21,6 +22,7 @@ export function Center(props: { project: Project; session: Session }) {
   const [newAt, setNewAt] = useState<{ x: number; y: number } | null>(null);
   const [closeFor, setCloseFor] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [agentMenu, setAgentMenu] = useState<{ x: number; y: number } | null>(null);
+  const [branchAt, setBranchAt] = useState<{ x: number; y: number } | null>(null);
   const preset = presets.find((p) => p.id === session.agent) ?? presets[0];
 
   const addShell = async () => {
@@ -102,7 +104,7 @@ export function Center(props: { project: Project; session: Session }) {
             }}
           >
             <span className={"dot " + (status[x.id] ?? "idle")} />
-            {x.branch || "(нет ветки)"}
+            {x.branch || (project.assistant ? "Ассистент" : "(нет ветки)")}
             {x.worktree && <span className="tag">worktree</span>}
             {x.worktree && (
               <span
@@ -121,18 +123,32 @@ export function Center(props: { project: Project; session: Session }) {
             )}
           </button>
         ))}
-        <button
-          className="stab"
-          title="Новая сессия в git worktree"
-          aria-label="Новая сессия"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            setNewAt({ x: r.left, y: r.bottom + 6 });
-          }}
-        >
-          +
-        </button>
+        {!project.assistant && (
+          <button
+            className="stab"
+            title="Новая сессия в git worktree"
+            aria-label="Новая сессия"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setNewAt({ x: r.left, y: r.bottom + 6 });
+            }}
+          >
+            +
+          </button>
+        )}
         <span className="grow" />
+        {session.branch && !project.assistant && (
+          <button
+            className="agent-pill branch-pill"
+            title={session.worktree ? "Ветка worktree-сессии закреплена" : "Ветки: переключиться или создать"}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setBranchAt({ x: r.right - 360, y: r.bottom + 4 });
+            }}
+          >
+            <GitBranch size={13} /> <span className="mono">{session.branch}</span> ▾
+          </button>
+        )}
         <button
           className="agent-pill"
           onClick={(e) => {
@@ -194,6 +210,7 @@ export function Center(props: { project: Project; session: Session }) {
 
       {newAt && <NewSessionPopover project={project} at={newAt} onClose={() => setNewAt(null)} />}
       {closeFor && <CloseSessionPopover session={closeFor.session} at={closeFor} onClose={() => setCloseFor(null)} />}
+      {branchAt && <BranchPopover session={session} at={branchAt} onClose={() => setBranchAt(null)} />}
       {agentMenu && <Menu x={agentMenu.x} y={agentMenu.y} items={agentItems} onClose={() => setAgentMenu(null)} />}
     </main>
   );

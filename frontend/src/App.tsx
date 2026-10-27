@@ -50,8 +50,9 @@ export function App() {
   const loaded = useUI((s) => s.st !== null);
   const project = useUI(activeProject);
   const session = useUI(activeSession);
-  const showFiles = useUI((s) => s.showFiles);
-  const showChanges = useUI((s) => s.showChanges);
+  // the assistant has no project files: only its agent is shown
+  const showFiles = useUI((s) => s.showFiles) && !project?.assistant;
+  const showChanges = useUI((s) => s.showChanges) && !project?.assistant;
   const widths = useUI((s) => s.widths);
   const quickOpen = useUI((s) => s.quickOpen);
   const sidebar = useUI((s) => s.sidebar);
@@ -74,9 +75,11 @@ export function App() {
         e.preventDefault();
         if (e.altKey) setState((s) => ({ showChanges: !s.showChanges }));
         else setState((s) => ({ showFiles: !s.showFiles }));
-      } else if (/^Digit[1-9]$/.test(e.code)) {
+      } else if (/^Digit[0-9]$/.test(e.code)) {
+        // ⌘0 — the assistant, ⌘1…9 — projects in tab order
         const ps = getState().st?.data.projects ?? [];
-        const p = ps[Number(e.code.slice(5)) - 1];
+        const n = Number(e.code.slice(5));
+        const p = n === 0 ? ps.find((x) => x.assistant) : ps.filter((x) => !x.assistant)[n - 1];
         if (p) {
           e.preventDefault();
           void selectProject(p.id);
